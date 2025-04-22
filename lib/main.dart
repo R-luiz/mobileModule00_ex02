@@ -38,7 +38,6 @@ class _CalculatorAppState extends State<CalculatorApp> {
   // Track calculation state
   String _currentExpression = "0";
   String _currentResult = "0";
-  bool _hasOperator = false;
   bool _hasResult = false;
 
   void onButtonPressed(String buttonText) {
@@ -70,23 +69,16 @@ class _CalculatorAppState extends State<CalculatorApp> {
   void _clearAll() {
     _currentExpression = "0";
     _currentResult = "0";
-    _hasOperator = false;
     _hasResult = false;
   }
 
   void _clearLast() {
     if (_currentExpression.length > 1) {
       // Remove the last character
-      String lastChar = _currentExpression[_currentExpression.length - 1];
       _currentExpression = _currentExpression.substring(
         0,
         _currentExpression.length - 1,
       );
-
-      // Update the hasOperator flag if we removed an operator
-      if (['+', '-', '*', '/'].contains(lastChar)) {
-        _hasOperator = false;
-      }
 
       // If we've cleared everything, reset to 0
       if (_currentExpression.isEmpty) {
@@ -109,7 +101,6 @@ class _CalculatorAppState extends State<CalculatorApp> {
       _currentExpression = number;
       _currentResult = "0";
       _hasResult = false;
-      _hasOperator = false;
       return;
     }
 
@@ -127,28 +118,38 @@ class _CalculatorAppState extends State<CalculatorApp> {
       _currentExpression = _currentResult + operator;
       _currentResult = "0";
       _hasResult = false;
-      _hasOperator = true;
       return;
     }
 
-    // Don't allow multiple operators in a row
-    if (_hasOperator) {
-      // Replace the last operator if the last character is an operator
+    // Allow negative numbers at the start of an expression or after another operator
+    if (operator == '-' &&
+        (_currentExpression == "0" ||
+            _currentExpression.endsWith('+') ||
+            _currentExpression.endsWith('-') ||
+            _currentExpression.endsWith('*') ||
+            _currentExpression.endsWith('/'))) {
+      if (_currentExpression == "0") {
+        _currentExpression = operator;
+      } else {
+        _currentExpression += operator;
+      }
+      return;
+    }
+
+    // Check if the last character is an operator and replace it
+    if (_currentExpression.isNotEmpty) {
       String lastChar = _currentExpression[_currentExpression.length - 1];
       if (['+', '-', '*', '/'].contains(lastChar)) {
+        // Don't allow "--" (replace the operator instead)
         _currentExpression =
             _currentExpression.substring(0, _currentExpression.length - 1) +
             operator;
-      } else {
-        // We have an operator in the middle, calculate intermediate result
-        _calculateResult();
-        _currentExpression = _currentResult + operator;
-        _hasResult = false;
+        return;
       }
-    } else {
-      _currentExpression += operator;
-      _hasOperator = true;
     }
+
+    // Otherwise, just add the operator
+    _currentExpression += operator;
   }
 
   void _handleDecimal() {
@@ -157,12 +158,45 @@ class _CalculatorAppState extends State<CalculatorApp> {
       _currentExpression = "0.";
       _currentResult = "0";
       _hasResult = false;
-      _hasOperator = false;
       return;
     }
 
+    // Find the last number in the expression
+    List<String> parts = [];
+
+    // Split by operators, but handle negative numbers correctly
+    int startIndex = 0;
+    for (int i = 0; i < _currentExpression.length; i++) {
+      if (i > 0 && ['+', '*', '/'].contains(_currentExpression[i])) {
+        parts.add(_currentExpression.substring(startIndex, i));
+        startIndex = i + 1;
+      } else if (i > 0 &&
+          _currentExpression[i] == '-' &&
+          ![
+            '0',
+            '1',
+            '2',
+            '3',
+            '4',
+            '5',
+            '6',
+            '7',
+            '8',
+            '9',
+            '.',
+          ].contains(_currentExpression[i - 1])) {
+        // This is a negative sign, not subtraction
+        // Don't split here
+      } else if (i > 0 && _currentExpression[i] == '-') {
+        parts.add(_currentExpression.substring(startIndex, i));
+        startIndex = i + 1;
+      }
+    }
+
+    // Add the last part
+    parts.add(_currentExpression.substring(startIndex));
+
     // Check if the last number already has a decimal point
-    List<String> parts = _currentExpression.split(RegExp(r'[+\-*/]'));
     String lastPart = parts.last;
 
     if (!lastPart.contains('.')) {
@@ -177,8 +211,8 @@ class _CalculatorAppState extends State<CalculatorApp> {
   }
 
   void _calculateResult() {
-    // Don't calculate if we already have a result or if there's no operator
-    if (_hasResult || !_hasOperator) {
+    // Don't calculate if we already have a result
+    if (_hasResult) {
       return;
     }
 
@@ -207,51 +241,167 @@ class _CalculatorAppState extends State<CalculatorApp> {
   }
 
   double _evaluateExpression(String expression) {
-    // Simple expression evaluation
-    // First, try to find addition or subtraction operations
-    int addIndex = expression.lastIndexOf('+');
-    int subIndex = expression.lastIndexOf('-');
+    if (expression.isEmpty) return 0;
 
-    // Handle addition and subtraction with the same precedence
-    if (addIndex > 0 || subIndex > 0) {
-      int lastOpIndex = addIndex > subIndex ? addIndex : subIndex;
-      String leftPart = expression.substring(0, lastOpIndex);
-      String rightPart = expression.substring(lastOpIndex + 1);
-
-      double leftValue = _evaluateExpression(leftPart);
-      double rightValue = double.parse(rightPart);
-
-      if (expression[lastOpIndex] == '+') {
-        return leftValue + rightValue;
-      } else {
-        return leftValue - rightValue;
-      }
+    // Parse the expression using the shunting yard algorithm
+    try {
+      return _calculate(expression);
+    } catch (e) {
+      log('Error evaluating expression: $e');
+      throw Exception("Invalid expression");
     }
+  }
 
-    // Then, look for multiplication or division
-    int mulIndex = expression.lastIndexOf('*');
-    int divIndex = expression.lastIndexOf('/');
+  double _calculate(String expression) {
+    // Tokenize the expression
+    List<String> tokens = _tokenize(expression);
 
-    if (mulIndex > 0 || divIndex > 0) {
-      int lastOpIndex = mulIndex > divIndex ? mulIndex : divIndex;
-      String leftPart = expression.substring(0, lastOpIndex);
-      String rightPart = expression.substring(lastOpIndex + 1);
+    // Convert to Reverse Polish Notation (postfix)
+    List<String> postfix = _convertToPostfix(tokens);
 
-      double leftValue = _evaluateExpression(leftPart);
-      double rightValue = double.parse(rightPart);
+    // Evaluate the postfix expression
+    return _evaluatePostfix(postfix);
+  }
 
-      if (expression[lastOpIndex] == '*') {
-        return leftValue * rightValue;
-      } else {
-        if (rightValue == 0) {
-          throw Exception("Division by zero");
+  List<String> _tokenize(String expression) {
+    List<String> tokens = [];
+    String currentNumber = '';
+    bool hasDecimal = false;
+    bool hasExponent = false;
+
+    for (int i = 0; i < expression.length; i++) {
+      String char = expression[i];
+
+      if (['+', '*', '/'].contains(char) &&
+          !(hasExponent && i > 0 && expression[i - 1].toLowerCase() == 'e')) {
+        // Only treat as operator if not part of scientific notation
+        if (currentNumber.isNotEmpty) {
+          tokens.add(currentNumber);
+          currentNumber = '';
+          hasDecimal = false;
+          hasExponent = false;
         }
-        return leftValue / rightValue;
+        tokens.add(char);
+      } else if (char == '-') {
+        // Check if minus is a negative sign or subtraction operator
+        if (i == 0 || ['+', '-', '*', '/'].contains(expression[i - 1])) {
+          // It's a negative sign
+          currentNumber += char;
+        } else if (hasExponent &&
+            i > 0 &&
+            expression[i - 1].toLowerCase() == 'e') {
+          // It's a negative exponent (e.g., 1.2e-10)
+          currentNumber += char;
+        } else {
+          // It's a subtraction operator
+          if (currentNumber.isNotEmpty) {
+            tokens.add(currentNumber);
+            currentNumber = '';
+            hasDecimal = false;
+            hasExponent = false;
+          }
+          tokens.add(char);
+        }
+      } else if (char == '.') {
+        if (!hasDecimal) {
+          currentNumber += char;
+          hasDecimal = true;
+        }
+      } else if (char.toLowerCase() == 'e' &&
+          currentNumber.isNotEmpty &&
+          !hasExponent) {
+        // Handle scientific notation (e.g., 1.2e+10)
+        currentNumber += char;
+        hasExponent = true;
+      } else if (char.contains(RegExp(r'[0-9]'))) {
+        currentNumber += char;
+      } else if ((char == '+') &&
+          hasExponent &&
+          i > 0 &&
+          expression[i - 1].toLowerCase() == 'e') {
+        // Handle positive exponent (e.g., 1.2e+10)
+        currentNumber += char;
       }
     }
 
-    // If no operations found, it's just a number
-    return double.parse(expression);
+    // Add the last number
+    if (currentNumber.isNotEmpty) {
+      tokens.add(currentNumber);
+    }
+
+    return tokens;
+  }
+
+  List<String> _convertToPostfix(List<String> tokens) {
+    List<String> output = [];
+    List<String> operatorStack = [];
+
+    Map<String, int> precedence = {'+': 1, '-': 1, '*': 2, '/': 2};
+
+    for (String token in tokens) {
+      if (['+', '-', '*', '/'].contains(token)) {
+        // Operator
+        while (operatorStack.isNotEmpty &&
+            precedence[operatorStack.last] != null &&
+            precedence[operatorStack.last]! >= precedence[token]!) {
+          output.add(operatorStack.removeLast());
+        }
+        operatorStack.add(token);
+      } else {
+        // Number
+        output.add(token);
+      }
+    }
+
+    // Add remaining operators to output
+    while (operatorStack.isNotEmpty) {
+      output.add(operatorStack.removeLast());
+    }
+
+    return output;
+  }
+
+  double _evaluatePostfix(List<String> postfix) {
+    List<double> stack = [];
+
+    for (String token in postfix) {
+      if (['+', '-', '*', '/'].contains(token)) {
+        // Operator
+        if (stack.length < 2) {
+          throw Exception("Invalid expression");
+        }
+
+        double b = stack.removeLast();
+        double a = stack.removeLast();
+
+        switch (token) {
+          case '+':
+            stack.add(a + b);
+            break;
+          case '-':
+            stack.add(a - b);
+            break;
+          case '*':
+            stack.add(a * b);
+            break;
+          case '/':
+            if (b == 0) {
+              throw Exception("Division by zero");
+            }
+            stack.add(a / b);
+            break;
+        }
+      } else {
+        // Number
+        stack.add(double.parse(token));
+      }
+    }
+
+    if (stack.length != 1) {
+      throw Exception("Invalid expression");
+    }
+
+    return stack[0];
   }
 
   @override
