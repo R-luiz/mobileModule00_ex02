@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'dart:developer';
 
 void main() {
   runApp(const MyApp());
@@ -31,8 +32,8 @@ class _CalculatorAppState extends State<CalculatorApp> {
   final TextEditingController resultController = TextEditingController(text: "0");
 
   void onButtonPressed(String buttonText) {
-    // Debug feature - print button text to console
-    print('Button pressed: $buttonText');
+    log('Button pressed: $buttonText');
+    //print('Button pressed: $buttonText');
 
     // Actual calculator logic will be implemented in the next exercise
   }
